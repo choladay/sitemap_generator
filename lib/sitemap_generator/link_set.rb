@@ -8,7 +8,7 @@ module SitemapGenerator
     @@new_location_opts = [:filename, :sitemaps_path, :sitemaps_namer]
 
     attr_reader :default_host, :sitemaps_path, :filename
-    attr_accessor :verbose, :exclude, :only, :yahoo_app_id, :include_root, :include_index, :sitemaps_host, :adapter, :yield_sitemap
+    attr_accessor :verbose, :exclude, :only, :yahoo_app_id, :include_root, :include_index, :sitemaps_host, :adapter, :yield_sitemap, :create_index
 
     # Create a new sitemap index and sitemap files.  Pass a block calls to the following
     # methods:
@@ -99,6 +99,15 @@ module SitemapGenerator
     #
     # * <tt>:verbose</tt> - If +true+, output a summary line for each sitemap and sitemap
     #   index that is created.  Default is +false+.
+    #
+    # * <tt>:create_index</tt> - Supported values: `true`, `false`, `:auto`.  Default: `true`.
+    #   Whether to create a sitemap index file.  If `true` an index file is always created,
+    #   regardless of how many links are in your sitemap.  If `false` an index file is never
+    #   created.  If `:auto` an index file is created only if your sitemap has more than
+    #   50,000 (or SitemapGenerator::MAX_SITEMAP_LINKS) links.
+    #
+    # KJV: When adding a new option be sure to include it in `options_for_group()` if
+    # the option should be inherited by groups.
     def initialize(options={})
       options = SitemapGenerator::Utilities.reverse_merge(options,
         :include_root => true,
@@ -108,7 +117,8 @@ module SitemapGenerator
           :google         => "http://www.google.com/webmasters/sitemaps/ping?sitemap=%s",
           :bing           => "http://www.bing.com/webmaster/ping.aspx?siteMap=%s",
           :sitemap_writer => "http://www.sitemapwriter.com/notify.php?crawler=all&url=%s"
-        }
+        },
+        :create_index => true
       )
       options.each_pair { |k, v| instance_variable_set("@#{k}".to_sym, v) }
 
@@ -300,6 +310,7 @@ module SitemapGenerator
       sitemap_index.location.url
     end
 
+    # All done.  Write out remaining files.
     def finalize!
       finalize_sitemap!
       finalize_sitemap_index!
@@ -385,6 +396,9 @@ module SitemapGenerator
       opts.delete(:public_path)
 
       # Reverse merge the current settings
+      # KJV: This hash could be a problem because it needs to be maintained
+      # when new options are added, but can easily be missed.  We really could
+      # do with a separate SitemapOptions class.
       current_settings = [
         :include_root,
         :include_index,
@@ -395,7 +409,8 @@ module SitemapGenerator
         :only,
         :exclude,
         :default_host,
-        :adapter
+        :adapter,
+        :create_index
       ].inject({}) do |hash, key|
         if value = instance_variable_get(:"@#{key}")
           hash[key] = value
@@ -430,10 +445,13 @@ module SitemapGenerator
     # block passed to create() is empty the default links are still included in the
     # sitemap.
     def finalize_sitemap!
-      add_default_links if !@added_default_links && !@created_group
       return if sitemap.finalized? || sitemap.empty? && @created_group
+      add_default_links if !@added_default_links && !@created_group
+      # This will finalize it.  We add to the index even if not creating an index because
+      # the index keeps track of how many links are in our sitemaps and we need this info
+      # for the summary line.  Also the index determines which file gets the first name
+      # so everything has to go via the index.
       add_to_index(sitemap)
-      output(sitemap.summary)
     end
 
     # Finalize a sitemap index and output a summary line.  Do nothing if it has already
@@ -441,7 +459,7 @@ module SitemapGenerator
     def finalize_sitemap_index!
       return if @protect_index || sitemap_index.finalized?
       sitemap_index.finalize!
-      output(sitemap_index.summary)
+      sitemap_index.write
     end
 
     # Return the interpreter linked to this instance.
@@ -571,7 +589,8 @@ module SitemapGenerator
           :namer => sitemaps_namer,
           :public_path => public_path,
           :sitemaps_path => @sitemaps_path,
-          :adapter => @adapter
+          :adapter => @adapter,
+          :verbose => verbose
         )
       end
 
@@ -582,7 +601,9 @@ module SitemapGenerator
           :namer => sitemap_index_namer,
           :public_path => public_path,
           :sitemaps_path => @sitemaps_path,
-          :adapter => @adapter
+          :adapter => @adapter,
+          :verbose => verbose,
+          :create_index => @create_index
         )
       end
 
